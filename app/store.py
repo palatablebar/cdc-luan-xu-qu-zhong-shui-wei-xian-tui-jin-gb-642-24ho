@@ -71,6 +71,23 @@ CREATE TABLE IF NOT EXISTS totals (
 CREATE TABLE IF NOT EXISTS manifests (
     batch_id TEXT PRIMARY KEY, json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS schema_pins (
+    batch_id TEXT PRIMARY KEY,
+    pinned TEXT NOT NULL,
+    policy TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    declared_json TEXT NOT NULL DEFAULT '{}',
+    cross_events INTEGER NOT NULL DEFAULT 0,
+    mapped_events INTEGER NOT NULL DEFAULT 0,
+    diff_count INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS schema_diffs (
+    batch_id TEXT NOT NULL, seq INTEGER NOT NULL,
+    row_ref TEXT NOT NULL, kind TEXT NOT NULL,
+    declared TEXT, pinned TEXT, level TEXT NOT NULL DEFAULT 'warn',
+    fields_json TEXT NOT NULL DEFAULT '[]', detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_schema_diffs_batch ON schema_diffs(batch_id, kind);
 """
 
 
@@ -139,10 +156,13 @@ class Store:
     # ---------- 一次运行落库（单事务替换） ----------
     def save_run(self, *, batch: dict, inputs: list[dict], events: list[dict],
                  snapshots: list[dict], watermarks: list[dict], stages: list[dict],
-                 totals: dict, manifest: dict) -> None:
+                 totals: dict, manifest: dict, pin: dict | None = None,
+                 diffs: list[dict] | None = None) -> None:
         with self.connect() as conn:
-            for table in ("inputs", "events", "snapshots", "watermarks", "stages", "totals"):
+            for table in ("inputs", "events", "snapshots", "watermarks", "stages",
+                          "totals", "schema_diffs"):
                 conn.execute(f"DELETE FROM {table} WHERE batch_id=?", (batch["batch_id"],))
+            conn.execute("DELETE FROM schema_pins WHERE batch_id=?", (batch["batch_id"],))
             for i, item in enumerate(inputs, 1):
                 conn.execute(
                     """INSERT INTO inputs (batch_id,seq,name,bytes,sha256,declared_rows,
@@ -194,6 +214,25 @@ class Store:
             for key, value in totals.items():
                 conn.execute("INSERT INTO totals (batch_id,key,value) VALUES (?,?,?)",
                              (batch["batch_id"], key, str(value)))
+            if pin:
+                conn.execute(
+                    """INSERT INTO schema_pins (batch_id,pinned,policy,basis,declared_json,
+                            cross_events,mapped_events,diff_count)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    (batch["batch_id"], pin["pinned"], pin["policy"], pin["basis"],
+                     json.dumps(pin.get("declared", {}), ensure_ascii=False),
+                     pin.get("cross_events", 0), pin.get("mapped_events", 0),
+                     pin.get("diff_count", 0)))
+            for i, diff in enumerate(diffs or [], 1):
+                conn.execute(
+                    """INSERT INTO schema_diffs (batch_id,seq,row_ref,kind,declared,pinned,
+                            level,fields_json,detail)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (batch["batch_id"], i, diff["row_ref"], diff["kind"],
+                     diff.get("declared"), diff.get("pinned"),
+                     diff.get("level", "warn"),
+                     json.dumps(diff.get("fields", []), ensure_ascii=False),
+                     diff.get("detail", "")))
             conn.execute(
                 "INSERT INTO manifests (batch_id,json) VALUES (?,?) "
                 "ON CONFLICT(batch_id) DO UPDATE SET json=excluded.json",
@@ -238,8 +277,17 @@ class Store:
                              (batch_id, key, str(value)))
 
     def save_attempt(self, *, batch: dict, inputs: list[dict], note: str = "") -> None:
-        """失败尝试：只写批次与输入，不动任何已存在批次的结果行。"""
+        """失败尝试：只写批次与输入，不动任何已存在批次的结果行。
+
+        ON CONFLICT 的 WHERE 保证：已完成的批次永远不会被一次失败尝试降级，
+        旧版结果原样保留。
+        """
         with self.connect() as conn:
+            existing = conn.execute(
+                "SELECT status FROM batches WHERE batch_id=?",
+                (batch["batch_id"],)).fetchone()
+            if existing and existing["status"] == "done":
+                return
             conn.execute(
                 """INSERT INTO batches (batch_id,batch_key,run_id,source,status,created_at,
                         finished_at,input_digest,watermark_utc,max_event_time,params_json,
@@ -247,7 +295,8 @@ class Store:
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(batch_id) DO UPDATE SET
                      status=excluded.status, finished_at=excluded.finished_at,
-                     note=excluded.note""",
+                     note=excluded.note
+                     WHERE batches.status != 'done'""",
                 (batch["batch_id"], batch["batch_key"], batch["run_id"], batch["source"],
                  batch["status"], batch["created_at"], batch.get("finished_at"),
                  batch["input_digest"], batch.get("watermark_utc"),
@@ -312,9 +361,31 @@ class Store:
         rows = self._all("SELECT json FROM manifests WHERE batch_id=?", (batch_id,))
         return json.loads(rows[0]["json"]) if rows else None
 
+    # ---------- 批次口径与待核对差异 ----------
+    def load_pin(self, batch_id: str) -> dict | None:
+        rows = self._all("SELECT * FROM schema_pins WHERE batch_id=?", (batch_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        row["declared"] = json.loads(row.pop("declared_json") or "{}")
+        return row
+
+    def load_diffs(self, batch_id: str, kind: str | None = None) -> list[dict]:
+        if kind:
+            rows = self._all(
+                "SELECT * FROM schema_diffs WHERE batch_id=? AND kind=? ORDER BY seq",
+                (batch_id, kind))
+        else:
+            rows = self._all(
+                "SELECT * FROM schema_diffs WHERE batch_id=? ORDER BY seq", (batch_id,))
+        for row in rows:
+            row["fields"] = json.loads(row.pop("fields_json") or "[]")
+        return rows
+
     def count_rows(self, batch_id: str) -> dict:
         out = {}
-        for table in ("inputs", "events", "snapshots", "watermarks", "stages"):
+        for table in ("inputs", "events", "snapshots", "watermarks", "stages",
+                      "schema_diffs"):
             out[table] = self._all(
                 f"SELECT COUNT(*) AS n FROM {table} WHERE batch_id=?", (batch_id,))[0]["n"]
         return out

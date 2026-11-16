@@ -1,5 +1,54 @@
 {% extends "base.html" %}
 {% block content %}
+{% if pin %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>批次口径</h1>
+    <p class="panel-sub">{{ batch.batch_id }} · {{ "手工指定" if pin.policy == "manual" else "自动钉住" }}</p>
+  </div>
+  <div class="panel-body">
+    <dl class="kv">
+      <dt>钉住口径</dt><dd class="mono">{{ pin.pinned }}</dd>
+      <dt>决策依据</dt><dd>{{ pin.basis }}</dd>
+      <dt>批内声明</dt><dd class="mono">
+        {% for key, count in pin.declared.items() %}{{ key }}={{ count }}{{ "、" if not loop.last }}{% else %}无{% endfor %}
+      </dd>
+      <dt>跨口径到达</dt><dd>{{ pin.cross_events | num }} 条（已按批次口径归一）</dd>
+      <dt>旧列名映射</dt><dd>{{ pin.mapped_events | num }} 条</dd>
+      <dt>待核对差异</dt><dd>{{ pin.diff_count | num }} 条</dd>
+    </dl>
+    <p class="hint" style="margin-top:8px">口径钉在逻辑批次上，不按文件到达时点解释；重放历史批次沿用落库口径，快照不改值。</p>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>待核对差异</h2>
+    <p class="panel-sub">{{ diffs | length }} 条 · 跨口径到达与旧列名映射已归一，歧义与未知列已隔离</p>
+  </div>
+  <div class="panel-body tight">
+    <div class="table-wrap">
+      <table class="grid" data-sortable>
+        <thead><tr><th>行号引用</th><th>类型</th><th>声明</th><th>批次口径</th><th>级别</th><th>说明</th></tr></thead>
+        <tbody>
+          {% for row in diffs %}
+          <tr>
+            <td class="mono">{{ row.row_ref }}</td>
+            <td>{{ kind_labels[row.kind] if row.kind in kind_labels else row.kind }}</td>
+            <td class="mono">{{ row.declared or "—" }}</td>
+            <td class="mono">{{ row.pinned }}</td>
+            <td>{{ row.level | level }}</td>
+            <td class="ellipsis" title="{{ row.detail }}">{{ row.detail }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if not diffs %}<p class="empty">本批没有跨口径到达或列名差异。</p>{% endif %}
+  </div>
+</section>
+{% endif %}
+
 <div class="split-even">
   <section class="panel">
     <div class="panel-head">

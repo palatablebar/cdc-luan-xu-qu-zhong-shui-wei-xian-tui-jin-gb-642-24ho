@@ -10,6 +10,8 @@
 - 采信 JSONL 与 CSV 两种导出格式，保留 `文件名:行号` 与原始文本；
 - 编码回退（utf-8 → gb18030），声明与实际不符会留原因码；重复表头、列数不齐、尾行截断各自判定；
 - v1/v2 列名演进按别名归一，契约外字段隔离，新旧列名同时出现判歧义；
+- 批次口径钉在逻辑批次上（不按文件到达时点解释）：新批次钉当前契约版本，补片旧列名
+  无损归一进入；每批口径与待核对差异落库，API / 页面 / 运行清单三处可回读；
 - 完全重复按「规范化全行签名」去重，时区写法不同但同一时刻也合并且注明；
 - 同键同版本不同内容判 `C_VERSION_CONFLICT`，墓碑之后到达的低版本 upsert 判
   `C_TOMBSTONE_RESURRECT`，两条都不应用；
@@ -23,7 +25,7 @@
 | 模块 | 使用者动作 | 入口 | 核心文件 |
 |---|---|---|---|
 | M1 事件采信 | 选来源跑一次采信，看到逐文件诊断 | `POST /api/events/import`、页面 `/events` | `reader.py` `decode.py` `format.py` |
-| M2 契约兼容 | 看列契约与别名，试归一一条事件 | `GET /api/schema`、`POST /api/schema/preview`、页面 `/schema` | `contract.py` `coerce.py` `alias.py` |
+| M2 契约兼容 | 看列契约与别名，试归一一条事件，回读批次口径与待核对差异 | `GET /api/schema`、`POST /api/schema/preview`、`GET /api/batches/{id}/schema`、页面 `/schema` | `contract.py` `coerce.py` `alias.py` `pin.py` |
 | M3 去重冲突 | 看重复、冲突、隔离与原因码分布 | `GET /api/conflicts`、页面 `/conflicts` | `dedup.py` `conflict.py` |
 | M4 水位迟到 | 看水位时间轴与迟到明细 | `GET /api/watermark`、页面 `/` | `watermark.py` `late.py` |
 | M5 快照物化 | 按水位物化快照，看待定键 | `POST /api/snapshot`、页面 `/snapshot` | `apply.py` `materialize.py` |
@@ -72,7 +74,7 @@ docker compose down -v             # 连数据库卷一起删
 | GET | `/api/conflicts` | 冲突、隔离、重复、分布 |
 | GET | `/api/watermark` | 水位、刻度、迟到表 |
 | GET | `/api/snapshot` / POST `/api/snapshot` | 读快照 / 重新物化 |
-| GET | `/api/batches`、`/api/batches/{id}`、`/api/batches/{id}/manifest` | 批次与清单 |
+| GET | `/api/batches`、`/api/batches/{id}`、`/api/batches/{id}/manifest`、`/api/batches/{id}/schema` | 批次、清单与批次口径回读 |
 | POST | `/api/batches/{id}/resume` | 续跑 |
 | GET | `/api/export/{events,quarantine,conflicts,snapshot}.csv` | 证据导出 |
 | GET | `/api/export/{snapshot,manifest}.json` | 快照与运行清单 |

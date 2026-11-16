@@ -11,6 +11,7 @@ from decimal import Decimal
 
 from ... import config, errors, manifest as manifest_mod, reasons
 from ..m1_events import service as m1_service
+from ..m2_schema import pin as pin_mod
 from ..m2_schema import service as m2_service
 from ..m3_dedup import service as m3_service
 from ..m4_watermark import watermark as wm_mod
@@ -23,7 +24,8 @@ COUNT_KEYS = ("files", "raw_lines", "blank_lines", "header_repeat", "applied",
               "duplicates", "conflicts", "quarantine", "late_events",
               "on_time_events", "max_behind_minutes", "keys_total",
               "snapshot_keys", "active_keys", "tombstone_keys",
-              "pending_only_keys", "pending_events", "drift_keys")
+              "pending_only_keys", "pending_events", "drift_keys",
+              "schema_cross_events", "schema_diff_rows")
 AMOUNT_KEYS = ("amount_snapshot", "amount_pending", "amount_drift", "amount_applied")
 TIME_KEYS = ("watermark_utc", "max_event_time", "snapshot_as_of")
 
@@ -84,13 +86,40 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
     if replay is not None:
         return _replay_payload(store, replay, key, run_id, stages)
 
+    try:
+        return _run_pipeline(settings=settings, store=store, bundle=bundle,
+                             counts=counts, params=params, batch_id=batch_id,
+                             key=key, run_id=run_id, started_at=started_at,
+                             clock=clock, stages=stages, resume_of=resume_of)
+    except errors.CdcError:
+        # 领域拒绝（如陈旧批次）：输入未采信，不写失败尝试，旧版结果不动
+        raise
+    except Exception as exc:
+        # 采信后中途失败：只记一条失败尝试，已完成批次的结果行一律保留
+        store.save_attempt(
+            batch={"batch_id": batch_id, "batch_key": key, "run_id": run_id,
+                   "source": bundle.source, "status": "failed",
+                   "created_at": started_at, "finished_at": _now_iso(),
+                   "input_digest": bundle.input_digest, "params": params,
+                   "note": f"失败：{exc}", "replay_of": resume_of},
+            inputs=[_input_row(f) for f in bundle.files],
+            note=f"失败：{exc}")
+        raise
+
+
+def _run_pipeline(*, settings, store, bundle, counts, params, batch_id, key,
+                  run_id, started_at, clock, stages, resume_of) -> dict:
+    """契约 → 去重冲突 → 水位 → 快照 → 落库；任何异常向上抛，由 run() 记失败尝试。"""
+
     # ---- M2 契约 ----
     step = time.perf_counter()
     norms = m2_service.normalize_rows(bundle.rows)
     bad = [n for n in norms if n.errors]
+    pin = pin_mod.decide(norms, params)
+    diffs = pin_mod.diff_rows(norms, pin)
     stages.append(_stage("contract", in_count=len(norms), out_count=len(norms) - len(bad),
                          quarantine=len(bad), elapsed_ms=_ms(step),
-                         note="别名映射 + 类型归一 + UTC"))
+                         note=f"别名映射 + 类型归一 + UTC · 口径 {pin.pinned}"))
 
     # ---- M3 去重冲突 ----
     step = time.perf_counter()
@@ -161,6 +190,9 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
         "amount_applied": snapshot.amounts["applied"],
         "watermark_utc": _iso(marks.final),
         "max_event_time": max_event,
+        "schema_pin": pin.pinned,
+        "schema_cross_events": pin.cross_events,
+        "schema_diff_rows": len(diffs),
         "reconcile_ok": 1 if all(r["ok"] for r in reconcile) else 0,
         "reconcile_json": json.dumps(_jsonable(reconcile), ensure_ascii=False),
     }
@@ -188,7 +220,8 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
                 for s in stages],
         counters={k: str(v) for k, v in totals.items() if k != "reconcile_json"},
         watermark=_iso(marks.final) or "", max_event_time=max_event or "",
-        reconcile=_jsonable(reconcile))
+        reconcile=_jsonable(reconcile),
+        schema_pin={**pin.to_row(), "diff_rows": len(diffs)})
 
     snapshot_rows = [{**row, "amount": None if row["amount"] is None else str(row["amount"])}
                      for row in snapshot.rows]
@@ -198,7 +231,9 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
         events=[n.to_row() for n in classified.all_rows],
         snapshots=snapshot_rows,
         watermarks=wm_mod.series_rows(marks, iso),
-        stages=stages, totals=totals, manifest=doc)
+        stages=stages, totals=totals, manifest=doc,
+        pin={**pin.to_row(), "diff_count": len(diffs)},
+        diffs=diffs)
 
     return {
         "status": "done",
@@ -220,6 +255,7 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
             "max_behind_minutes": marks.max_behind_seconds // 60,
         },
         "inputs": [_input_row(f) for f in bundle.files],
+        "schema_pin": {**pin.to_row(), "diff_rows": len(diffs)},
         "elapsed_ms": elapsed,
     }
 
@@ -253,6 +289,7 @@ def _replay_payload(store, replay: dict, key: str, run_id: str,
                       "late": int(totals.get("late_events", 0) or 0),
                       "on_time": int(totals.get("on_time_events", 0) or 0)},
         "inputs": store.load_inputs(replay["batch_id"]),
+        "schema_pin": store.load_pin(replay["batch_id"]),
         "elapsed_ms": 0,
     }
 

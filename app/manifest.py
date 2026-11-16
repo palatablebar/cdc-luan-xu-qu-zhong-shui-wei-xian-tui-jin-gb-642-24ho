@@ -28,8 +28,9 @@ def digest_parts(parts: list[str]) -> str:
 def build(*, run_id: str, batch_id: str, batch_key: str, settings, source: str,
           input_digest: str, inputs: list[dict], params: dict, started_at: str,
           finished_at: str, elapsed_ms: int, stages: list[dict], counters: dict,
-          watermark: str, max_event_time: str, reconcile: dict) -> dict:
-    """清单是一份可独立复核的证据：输入摘要 + 参数 + 计数 + 对账身份。"""
+          watermark: str, max_event_time: str, reconcile: dict,
+          schema_pin: dict | None = None) -> dict:
+    """清单是一份可独立复核的证据：输入摘要 + 参数 + 计数 + 对账身份 + 批次口径。"""
     return {
         "run_id": run_id,
         "batch_id": batch_id,
@@ -42,6 +43,7 @@ def build(*, run_id: str, batch_id: str, batch_key: str, settings, source: str,
         "timezone": "入库 UTC，页面按 Asia/Shanghai(+08:00)",
         "money": "金额 Decimal，单位元，最小刻度 0.01",
         "window": config.WINDOW_NOTE,
+        "schema_pin": schema_pin or {},
         "input_digest": input_digest,
         "inputs": inputs,
         "params": params,

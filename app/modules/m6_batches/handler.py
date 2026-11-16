@@ -70,6 +70,7 @@ def page_batches(request: Request, ctx: Ctx = Depends(get_ctx)):
                   batches=rows, totals=totals, stages=stages,
                   stored_watermark=state.stored_watermark(ctx.store),
                   plan=resume.plan(ctx.store, batch["batch_id"]) if batch else {},
+                  pin=(ctx.store.load_pin(batch["batch_id"]) if batch else None),
                   manifest=(ctx.store.load_manifest(batch["batch_id"])
                             if batch else None),
                   ticks=history.timeline_rows(ctx.store, limit=10),

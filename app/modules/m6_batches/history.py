@@ -11,6 +11,7 @@ def rows(store, limit: int = 30) -> list[dict]:
     for batch in store.list_batches(limit=limit):
         totals = store.load_totals(batch["batch_id"])
         inputs = store.load_inputs(batch["batch_id"])
+        pin = store.load_pin(batch["batch_id"])
         out.append({
             "batch_id": batch["batch_id"],
             "run_id": batch["run_id"],
@@ -22,6 +23,8 @@ def rows(store, limit: int = 30) -> list[dict]:
             "watermark_utc": batch.get("watermark_utc"),
             "max_event_time": batch.get("max_event_time"),
             "note": batch.get("note", ""),
+            "schema_pin": pin["pinned"] if pin else None,
+            "schema_diffs": pin["diff_count"] if pin else 0,
             "files": [{"name": f["name"], "sha256": f["sha256"], "lines": f["lines"]}
                       for f in inputs],
             "counters": {
@@ -65,6 +68,7 @@ def detail(store, batch_id: str) -> dict:
         "counters": {k: v for k, v in totals.items()
                      if not k.startswith("reconcile")},
         "reconcile": reconcile,
+        "schema_pin": store.load_pin(batch_id),
         "inputs": store.load_inputs(batch_id),
         "stages": store.load_stages(batch_id),
     }

@@ -28,6 +28,7 @@ class Norm:
     event_time_raw: str = ""
     schema: str = ""
     payload: dict = field(default_factory=dict)
+    mapped: list = field(default_factory=list)   # 本行用到的旧列名 → 规范列名
     amount: Decimal | None = None
     qty: int | None = None
     codes: list[str] = field(default_factory=list)
@@ -125,7 +126,9 @@ def normalize_row(row: RawRow) -> Norm:
         if code.startswith(("W_", "S_")) and code not in norm.codes:
             norm.codes.append(code)
 
-    payload, p_codes, unknown, ambiguous = alias.normalize_payload(_payload_of(raw), schema)
+    raw_payload = _payload_of(raw)
+    norm.mapped = alias.mapped_fields(raw_payload)
+    payload, p_codes, unknown, ambiguous = alias.normalize_payload(raw_payload, schema)
     norm.payload = payload
     for code in p_codes:
         if code == "E_UNKNOWN_FIELD":

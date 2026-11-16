@@ -88,6 +88,30 @@
 `run_id`（`CDC-时间戳-随机`）、`batch_id`（`B-批次键`）、`batch_key`（输入摘要 + 规则版本 +
 参数 的 sha256 前 10 位）、`input_digest`（每个文件 `name:sha256` 的摘要）、`inputs[]`
 （`name/bytes/sha256/lines/encoding/kind/declared_rows/status/code`）、`params`、
-`watermark_utc`、`max_event_time_utc`、`stages[]`、`counters`、`reconcile`。
+`watermark_utc`、`max_event_time_utc`、`stages[]`、`counters`、`reconcile`、`schema_pin`。
 
 同一 `input_digest` 重跑命中同一 `batch_key`，返回原批次、不新增行。
+
+## 10 批次口径与待核对差异
+
+口径（schema 版本）是**逻辑批次的属性**，不按文件到达时点解释：
+
+- **钉住**：每批采信时钉一套口径并落库（`schema_pins` 表）。`auto` 钉当前契约版本
+  （缺省 v2），与文件到达先后无关；`params.schema_pin` 可手工指定，参数进批次键，
+  换口径就是新批次，已发布批次的口径与结果不受影响。
+- **归一**：批内所有事件按钉住的口径解释，旧列名走别名映射无损归一；跨口径到达
+  不被拦下，但逐条登记。
+- **回读**：`GET /api/batches/{id}/schema` 给出该批的 `pin`（钉住版本、决策方式、
+  依据、批内声明分布、跨口径条数）与 `diffs`（待核对差异）；契约页与批次页同步展示，
+  运行清单的 `schema_pin` 字段可独立复核。
+- **待核对差异**（`schema_diffs` 表）四种类型：
+
+| kind | 级别 | 含义 |
+|---|---|---|
+| `schema_mismatch` | warn | 声明口径 ≠ 批次口径，已按批次口径归一 |
+| `alias_mapped` | warn | 用了旧列名，已映射到规范列名（字段清单一并登记） |
+| `alias_ambiguous` | error | 新旧列名同现且取值不同，已隔离 |
+| `unknown_field` | error | 契约外字段，已隔离 |
+
+- **失败保护**：采信后中途失败只记一条 `failed` 尝试；`failed` 尝试永远不会把
+  已完成批次降级，也不会动其结果行（事件、快照、口径、差异）。

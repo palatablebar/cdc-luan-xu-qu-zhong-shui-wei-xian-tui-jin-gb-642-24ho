@@ -13,6 +13,21 @@ def canonical_name(name: str) -> str:
     return config.ALIASES.get(name, name)
 
 
+def mapped_fields(payload: dict) -> list[dict]:
+    """payload 里出现的旧列名 → 规范列名，按旧列名排序。
+
+    归一本身在 normalize_payload 里完成；这里只登记「这一行用了哪些旧列名」，
+    供批次口径的待核对差异使用（TRAP-17 的映射证据）。
+    """
+    out = []
+    for key in payload:
+        name = str(key).strip()
+        target = config.ALIASES.get(name)
+        if target:
+            out.append({"alias": name, "target": target})
+    return sorted(out, key=lambda r: r["alias"])
+
+
 def normalize_payload(payload: dict, schema: str = config.DEFAULT_SCHEMA
                       ) -> tuple[dict, list[str], list[str], list[str]]:
     """返回 (规范 payload, 代码列表, 未知列, 歧义列)。"""

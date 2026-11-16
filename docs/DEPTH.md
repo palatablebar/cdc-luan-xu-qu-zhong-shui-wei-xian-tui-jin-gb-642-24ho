@@ -16,7 +16,7 @@
 | 模块 | 使用者动作 | 入口 | 核心文件 | 测试 |
 |---|---|---|---|---|
 | M1 事件采信 | 选来源跑一次采信，看逐文件诊断与行号 | POST /api/events/import、页面 /events | `app/modules/m1_events/reader.py` `app/modules/m1_events/decode.py` `app/modules/m1_events/format.py` `app/modules/m1_events/service.py` | `tests/test_m1_events.py` |
-| M2 契约兼容 | 看字段契约与别名，试归一一条事件 | GET /api/schema、POST /api/schema/preview、页面 /schema | `app/modules/m2_schema/contract.py` `app/modules/m2_schema/coerce.py` `app/modules/m2_schema/alias.py` `app/modules/m2_schema/service.py` | `tests/test_m2_schema.py` |
+| M2 契约兼容 | 看字段契约与别名，试归一一条事件，回读批次口径与待核对差异 | GET /api/schema、POST /api/schema/preview、GET /api/batches/{id}/schema、页面 /schema | `app/modules/m2_schema/contract.py` `app/modules/m2_schema/coerce.py` `app/modules/m2_schema/alias.py` `app/modules/m2_schema/pin.py` `app/modules/m2_schema/service.py` | `tests/test_m2_schema.py` `tests/test_m2_pin.py` |
 | M3 去重冲突 | 看重复、冲突、隔离与优先级 | GET /api/conflicts、页面 /conflicts | `app/modules/m3_dedup/dedup.py` `app/modules/m3_dedup/conflict.py` `app/modules/m3_dedup/service.py` | `tests/test_m3_dedup.py` |
 | M4 水位迟到 | 看水位时间轴与迟到明细 | GET /api/watermark、页面 / | `app/modules/m4_watermark/watermark.py` `app/modules/m4_watermark/late.py` `app/modules/m4_watermark/service.py` | `tests/test_m4_watermark.py` |
 | M5 快照物化 | 按水位物化快照，看待定键与三条对账 | POST /api/snapshot、页面 /snapshot | `app/modules/m5_snapshot/apply.py` `app/modules/m5_snapshot/materialize.py` `app/modules/m5_snapshot/service.py` | `tests/test_m5_snapshot.py` |
@@ -41,6 +41,7 @@
 | TRAP-19 | 一条事件同时像「重复」又像「冲突」，坏行还互相重复 | 按代码书写顺序覆盖，结果随遍历顺序变 | 优先级 `quarantine > conflict > duplicate > apply`，各桶由集合运算得出 | `app/modules/m3_dedup/service.py` | `tests/test_m3_dedup.py::test_conflict_beats_duplicate`、`tests/test_m3_dedup.py::test_priority_independent_of_input_order` |
 | TRAP-23 | 事件 `event_time` 恰好等于水位线 / 恰好等于 `as_of` | 两端都算，重复计入或漏计 | 迟到用半开 `[水位线, +inf)`；快照含 `as_of`、待定窗口 `(as_of, +inf)` 半开 | `app/modules/m4_watermark/watermark.py`、`app/modules/m5_snapshot/materialize.py` | `tests/test_m4_watermark.py::test_boundary_equal_watermark_is_not_late`、`tests/test_m5_snapshot.py::test_boundary_event_at_as_of_included_once` |
 | TRAP-26 | 拿上一轮旧导出再跑一次（最大事件 06:00 < 已持久化水位 08:52） | 无条件覆盖，水位回退、快照变旧 | 陈旧批次直接 409 `C_STALE_BATCH`，已落库结果不动 | `app/modules/m6_batches/resume.py`、`app/modules/m6_batches/state.py` | `tests/test_m6_batches.py::test_stale_input_rejected` |
+| TRAP-31 | 上游切新列名后补片仍发旧列名，按文件到达时点解释口径 | 同一逻辑批次混成两套字段，重放历史快照改值 | 口径钉在逻辑批次：auto 钉当前契约版本，补片旧列名按别名归一进入；每批口径与待核对差异落库可回读；失败尝试不降级已完成批次 | `app/modules/m2_schema/pin.py`、`app/modules/m6_batches/service.py`、`app/store.py` | `tests/test_m2_pin.py::test_mixed_batch_v1_rows_registered_as_diffs`、`tests/test_m2_pin.py::test_pin_stable_on_idempotent_replay`、`tests/test_m2_pin.py::test_save_attempt_never_demotes_done_batch` |
 
 ## 对账规则
 

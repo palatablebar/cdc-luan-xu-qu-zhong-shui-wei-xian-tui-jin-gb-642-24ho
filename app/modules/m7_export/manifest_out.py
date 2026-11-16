@@ -29,6 +29,7 @@ def build(store, batch_id: str) -> dict:
         or batch.get("max_event_time"),
         "stages": doc.get("stages", _stages(store, batch_id)),
         "counters": doc.get("counters", store.load_totals(batch_id)),
+        "schema_pin": doc.get("schema_pin") or store.load_pin(batch_id) or {},
         "reconcile": doc.get("reconcile", []),
         "replayable": "同一 input_digest 重跑命中 batch_key，不新增行",
     }

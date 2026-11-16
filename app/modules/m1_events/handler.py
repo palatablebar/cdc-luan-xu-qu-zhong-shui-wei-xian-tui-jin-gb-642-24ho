@@ -32,6 +32,7 @@ def api_import(payload: dict | None = None, ctx: Ctx = Depends(get_ctx)) -> dict
         "stages": result["stages"],
         "counters": result["counters"],
         "totals": result["totals"],
+        "schema_pin": result.get("schema_pin"),
         "reconciliation": result["reconciliation"],
         "all_balanced": result["all_balanced"],
         "watermark": result["watermark"],

@@ -21,7 +21,7 @@
     <div class="table-wrap">
       <table class="grid" data-sortable>
         <thead>
-          <tr><th>批次</th><th>运行号</th><th>来源</th><th>水位</th><th class="num">已应用</th><th class="num">重复</th><th class="num">冲突</th><th class="num">隔离</th><th class="num">迟到</th><th class="num">快照键</th><th>对账</th><th>输入摘要</th></tr>
+          <tr><th>批次</th><th>运行号</th><th>来源</th><th>口径</th><th>水位</th><th class="num">已应用</th><th class="num">重复</th><th class="num">冲突</th><th class="num">隔离</th><th class="num">迟到</th><th class="num">快照键</th><th>对账</th><th>输入摘要</th></tr>
         </thead>
         <tbody>
           {% for row in batches %}
@@ -29,6 +29,7 @@
             <td class="mono">{{ row.batch_id }}</td>
             <td class="mono ellipsis" title="{{ row.run_id }}">{{ row.run_id | masked(18) }}</td>
             <td>{{ row.source }}</td>
+            <td class="mono" title="待核对差异 {{ row.schema_diffs }} 条">{{ row.schema_pin or "—" }}</td>
             <td class="mono nowrap">{{ row.watermark_utc | localdt }}</td>
             <td class="num">{{ row.counters.applied | num }}</td>
             <td class="num">{{ row.counters.duplicates | num }}</td>
@@ -59,6 +60,9 @@
         <dt>批次</dt><dd>{{ batch.batch_id }}</dd>
         <dt>运行号</dt><dd>{{ batch.run_id }}</dd>
         <dt>批次键</dt><dd>{{ batch.batch_key }}</dd>
+        {% if pin %}
+        <dt>口径</dt><dd>{{ pin.pinned }}（{{ "手工指定" if pin.policy == "manual" else "自动" }}）· 待核对差异 {{ pin.diff_count }} 条</dd>
+        {% endif %}
         <dt>输入摘要</dt><dd>{{ batch.input_digest }}</dd>
         <dt>水位</dt><dd>{{ batch.watermark_utc | localdt }}</dd>
         <dt>最大事件</dt><dd>{{ batch.max_event_time | localdt }}</dd>
